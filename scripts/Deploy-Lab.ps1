@@ -12,7 +12,9 @@ param(
 
   [string]$SubscriptionId,
 
-  [switch]$AddRdp
+  [switch]$AddRdp,
+
+  [string]$ReportPath
 )
 
 Set-StrictMode -Version Latest
@@ -233,6 +235,156 @@ function Invoke-Terraform {
   finally { Pop-Location }
 }
 
+function Ensure-ImportExcel {
+  param([switch]$AllowInstall)
+  $mod = Get-Module -ListAvailable -Name ImportExcel | Select-Object -First 1
+  if ($mod) { return $true }
+  if ($AllowInstall) {
+    try {
+      Write-Info "ImportExcel module not found. Attempting install..."
+      $currentPolicy = Get-PSRepository -Name 'PSGallery' -ErrorAction SilentlyContinue
+      if ($currentPolicy -and $currentPolicy.InstallationPolicy -ne 'Trusted') {
+        Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted -ErrorAction SilentlyContinue | Out-Null
+      }
+      Install-Module -Name ImportExcel -Scope CurrentUser -Force -ErrorAction Stop
+      return $true
+    } catch {
+      Write-Warn "Failed to install ImportExcel: $($_.Exception.Message)"
+      return $false
+    }
+  }
+  return $false
+}
+
+function Get-PasswordsFromTf {
+  param([string]$RepoRoot)
+  $linuxPass = $null
+  $webPass = $null
+  $rdpPass = $null
+  try {
+    $main = Get-Content (Join-Path $RepoRoot 'main.tf') -Raw
+    $m = [regex]::Match($main, 'admin_password\s*=\s*"([^"]+)"')
+    if ($m.Success) { $linuxPass = $m.Groups[1].Value; $webPass = $linuxPass }
+  } catch { }
+  try {
+    $rdp = Get-Content (Join-Path $RepoRoot 'rdp.tf') -Raw
+    $m2 = [regex]::Match($rdp, 'admin_password\s*=\s*"([^"]+)"')
+    if ($m2.Success) { $rdpPass = $m2.Groups[1].Value }
+  } catch { }
+  if (-not $linuxPass) { $linuxPass = 'BestSecurity1' }
+  if (-not $webPass)   { $webPass   = $linuxPass }
+  if (-not $rdpPass)   { $rdpPass   = 'BestSecurity1' }
+  return [pscustomobject]@{ Linux=$linuxPass; Web=$webPass; Rdp=$rdpPass }
+}
+
+function Get-TerraformOutputs {
+  param([string]$TerraformExe, [string]$RepoRoot)
+  Push-Location $RepoRoot
+  try {
+    $json = & $TerraformExe output -json
+    return $json | ConvertFrom-Json
+  } finally { Pop-Location }
+}
+
+function Generate-LabReport {
+  param(
+    [string]$TerraformExe,
+    [string]$RepoRoot,
+    [string]$Path,
+    [switch]$AllowModuleInstall
+  )
+
+  $outputs = Get-TerraformOutputs -TerraformExe $TerraformExe -RepoRoot $RepoRoot
+  $pwds = Get-PasswordsFromTf -RepoRoot $RepoRoot
+
+  $linuxRows = @()
+  $webRows = @()
+  $rdpRows = @()
+
+  $publicLinux = $outputs.public_ips.value
+  $privateLinux = $outputs.private_ips_linux.value
+  $adminLinux = $outputs.admin_usernames.value
+  foreach ($name in ($adminLinux.Keys | Sort-Object)) {
+    $idx = [int]([regex]::Match($name, '\\d+').Value)
+    $rg = ('SASE-LAB{0}' -f $idx)
+    $linuxRows += [pscustomobject]@{
+      ResourceGroup = $rg
+      VMName        = $name
+      Username      = $adminLinux[$name]
+      Password      = $pwds.Linux
+      PublicIP      = $publicLinux[$name]
+      PrivateIP     = $privateLinux[$name]
+      Type          = 'Linux'
+    }
+  }
+
+  $privateWeb = $outputs.private_ips_web.value
+  $webAdmins  = $outputs.web_vm_admin_usernames.value
+  foreach ($key in ($privateWeb.Keys | Sort-Object)) {
+    $idx = [int]([regex]::Match($key, '\\d+').Value)
+    $rg = ('SASE-LAB{0}' -f $idx)
+    $username = if ($webAdmins.Count -ge $idx) { $webAdmins[$idx-1] } else { "Websrv{0:d2}" -f $idx }
+    $webRows += [pscustomobject]@{
+      ResourceGroup = $rg
+      VMName        = $key
+      Username      = $username
+      Password      = $pwds.Web
+      PublicIP      = ''
+      PrivateIP     = $privateWeb[$key]
+      Type          = 'Web'
+    }
+  }
+
+  if ($outputs.PSObject.Properties.Name -contains 'rdp_clients') {
+    $rdpMap = $outputs.rdp_clients.value
+    foreach ($user in ($rdpMap.Keys | Sort-Object)) {
+      $row = $rdpMap[$user]
+      $rdpRows += [pscustomobject]@{
+        ResourceGroup = 'SASE-RDPClient'
+        VMName        = $row.vm
+        Username      = $user
+        Password      = $pwds.Rdp
+        PublicIP      = $row.ip
+        PrivateIP     = ''
+        Type          = 'RDP-Client'
+      }
+    }
+  }
+
+  $allRows = $linuxRows + $webRows + $rdpRows
+  if (-not $Path) {
+    $ts = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $Path = Join-Path $RepoRoot ("reports/LabUsers-$ts.xlsx")
+  }
+  $dir = Split-Path -Parent $Path
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+  if (Ensure-ImportExcel -AllowInstall:$AllowModuleInstall) {
+    Import-Module ImportExcel -ErrorAction SilentlyContinue | Out-Null
+    $summary = [pscustomobject]@{
+      TotalResources = $allRows.Count
+      LinuxCount     = $linuxRows.Count
+      WebCount       = $webRows.Count
+      RdpCount       = $rdpRows.Count
+      GeneratedAt    = (Get-Date)
+    }
+    $null = $summary | Export-Excel -Path $Path -WorksheetName 'Summary' -AutoSize -BoldTopRow -FreezeTopRow -TableName 'Summary' -TableStyle Medium6
+    if ($linuxRows.Count -gt 0) { $null = $linuxRows | Export-Excel -Path $Path -WorksheetName 'Linux' -AutoSize -BoldTopRow -FreezeTopRow -TableName 'Linux' -TableStyle Medium6 -Append }
+    if ($webRows.Count -gt 0)   { $null = $webRows   | Export-Excel -Path $Path -WorksheetName 'Web'   -AutoSize -BoldTopRow -FreezeTopRow -TableName 'Web'   -TableStyle Medium6 -Append }
+    if ($rdpRows.Count -gt 0)   { $null = $rdpRows   | Export-Excel -Path $Path -WorksheetName 'RDP'   -AutoSize -BoldTopRow -FreezeTopRow -TableName 'RDP'   -TableStyle Medium6 -Append }
+    Write-Info ("Report written: {0}" -f $Path)
+  } else {
+    # Fallback to CSVs
+    $csvBase = [System.IO.Path]::ChangeExtension($Path, $null)
+    $csvDir = Split-Path -Parent $csvBase
+    $csvPrefix = Split-Path -Leaf $csvBase
+    if ($linuxRows.Count -gt 0) { $linuxRows | Export-Csv -Path (Join-Path $csvDir ("$csvPrefix-Linux.csv")) -NoTypeInformation -Encoding UTF8 }
+    if ($webRows.Count -gt 0)   { $webRows   | Export-Csv -Path (Join-Path $csvDir ("$csvPrefix-Web.csv"))   -NoTypeInformation -Encoding UTF8 }
+    if ($rdpRows.Count -gt 0)   { $rdpRows   | Export-Csv -Path (Join-Path $csvDir ("$csvPrefix-RDP.csv"))   -NoTypeInformation -Encoding UTF8 }
+    Write-Warn "ImportExcel module not available. Generated CSV files instead."
+  }
+}
+
 # ---- Main flow (mirrors wafaas-style execution) ----
 Ensure-Prereqs
 Ensure-AzLogin
@@ -247,3 +399,14 @@ $tfExe = Resolve-TerraformExe
 Invoke-Terraform -Action $Action -ExtraArgs $tfArgs -AutoApprove:$AutoApprove -TerraformExe $tfExe
 
 Write-Info "Done. Use 'terraform output' to inspect results."
+
+if ($Action -eq 'apply') {
+  try {
+    $scriptRoot = $PSScriptRoot; if (-not $scriptRoot) { $scriptRoot = Split-Path -Parent $PSCommandPath }
+    if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
+    $repo = Resolve-Path (Join-Path -Path $scriptRoot -ChildPath '..')
+    Generate-LabReport -TerraformExe $tfExe -RepoRoot $repo -Path $ReportPath -AllowModuleInstall
+  } catch {
+    Write-Warn "Failed to generate XLSX/CSV report: $($_.Exception.Message)"
+  }
+}

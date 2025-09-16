@@ -60,6 +60,7 @@ Examples:
   - Destroy/Delete: `pwsh scripts/Deploy-Lab.ps1 -Action destroy -AutoApprove` or `-Action delete`
   - Add RDP clients: append `-AddRdp` to include the optional `SASE-RDPClient` stack (disabled by default)
   - Optional params: `-SubscriptionId <GUID>`, `-Region "Sweden Central"`, `-RdpAllowedCidrs @("203.0.113.4/32")`
+  - Report: add `-ReportPath reports/LabUsers.xlsx` to save a formatted XLSX after apply. If the ImportExcel module is not available, the script attempts to install it; otherwise CSV fallbacks are created.
 
 Subscription selection mirrors the referenced project:
 - Preset sources checked in order: CLI param `-SubscriptionId` (optional), env `ARM_SUBSCRIPTION_ID` or `AZURE_SUBSCRIPTION_ID`, then local files `subscription.json` (with `subscriptionId`), `.azure-subscription` (plain GUID), `config/subscription.json`, or `scripts/subscription.json`.
@@ -69,6 +70,16 @@ Terraform executable resolution:
 - Checks env overrides `TF_EXE`, `TERRAFORM_EXE`, or `TERRAFORM_PATH`. If one points to a valid file, it is used.
 - If not set but `terraform` exists on PATH, that is used.
 - Otherwise, the script prompts you to enter the full path to `terraform(.exe)` and uses it for this run.
+
+**Lab Report**
+
+- **Output:** Generates a formatted `.xlsx` after apply (or CSV fallback) summarizing created resources and login details.
+- **Sheets:** `Summary`, `Linux`, `Web`, `RDP` (when `-AddRdp` is used).
+- **Columns:** `ResourceGroup`, `VMName`, `Username`, `Password`, `PublicIP`, `PrivateIP`, `Type`.
+- **Module:** Uses PowerShell `ImportExcel`. If unavailable, the script attempts to install it (CurrentUser). If install fails, CSV files are written instead.
+- **Path:** Provide `-ReportPath reports/LabUsers.xlsx`, or omit to create a timestamped file under `reports/`.
+- **Example:**
+  - `pwsh scripts/Deploy-Lab.ps1 -Action apply -AddRdp -Count 3 -Region "Sweden Central" -RdpAllowedCidrs @("203.0.113.4/32") -AutoApprove -ReportPath reports/LabUsers.xlsx`
 
 **Credentials and Access**
 

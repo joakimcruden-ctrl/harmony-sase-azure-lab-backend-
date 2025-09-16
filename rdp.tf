@@ -143,7 +143,7 @@ resource "azurerm_windows_virtual_machine" "rdp_vm" {
     version   = "latest"
   }
 
-  enable_automatic_updates = true
+  automatic_updates_enabled = true
   provision_vm_agent       = true
 
   boot_diagnostics { storage_account_uri = null }
