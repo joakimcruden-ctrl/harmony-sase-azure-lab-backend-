@@ -67,6 +67,17 @@ function Resolve-TerraformExe {
   }
 }
 
+# Non-interactive resolver for Terraform. Returns $null if not found.
+function Try-Resolve-TerraformExeOptional {
+  $envVars = @('TF_EXE', 'TERRAFORM_EXE', 'TERRAFORM_PATH')
+  foreach ($name in $envVars) {
+    $val = [System.Environment]::GetEnvironmentVariable($name)
+    if (-not [string]::IsNullOrWhiteSpace($val) -and (Test-Path $val)) { return $val }
+  }
+  if (Test-Command terraform) { return 'terraform' }
+  return $null
+}
+
 function Get-PresetSubscriptionId {
   # Sources (in order): explicit param, env vars, local files
   param([string]$ParamSubId)
@@ -281,10 +292,17 @@ function Get-PasswordsFromTf {
 
 function Get-TerraformOutputs {
   param([string]$TerraformExe, [string]$RepoRoot)
+  if ([string]::IsNullOrWhiteSpace($TerraformExe)) { return $null }
   Push-Location $RepoRoot
   try {
-    $json = & $TerraformExe output -json
-    return $json | ConvertFrom-Json
+    try {
+      $json = & $TerraformExe output -json
+      if ([string]::IsNullOrWhiteSpace($json)) { return $null }
+      return $json | ConvertFrom-Json
+    } catch {
+      # If state/backends aren't initialized or outputs don't exist, fall back to null
+      return $null
+    }
   } finally { Pop-Location }
 }
 
@@ -296,6 +314,10 @@ function Generate-LabReport {
     [switch]$AllowModuleInstall
   )
 
+  # If no Terraform exe provided, try optional resolver without prompting
+  if ([string]::IsNullOrWhiteSpace($TerraformExe)) {
+    $TerraformExe = Try-Resolve-TerraformExeOptional
+  }
   $outputs = Get-TerraformOutputs -TerraformExe $TerraformExe -RepoRoot $RepoRoot
   $pwds = Get-PasswordsFromTf -RepoRoot $RepoRoot
 
@@ -307,41 +329,99 @@ function Generate-LabReport {
     return $ht
   }
 
+  function Try-GetOutputValue([object]$outs, [string]$name) {
+    if ($null -eq $outs) { return $null }
+    $props = $outs.PSObject.Properties.Name
+    if ($props -contains $name) { return $outs.$name.value }
+    return $null
+  }
+
+  function Get-ResourceCountFromTf([string]$root) {
+    try {
+      $main = Get-Content (Join-Path $root 'main.tf') -Raw
+      $m = [regex]::Match($main, 'variable\s+"resource_group_count"[\s\S]*?default\s*=\s*(\d+)', 'Singleline')
+      if ($m.Success) { return [int]$m.Groups[1].Value }
+    } catch { }
+    return 0
+  }
+
   $linuxRows = @()
   $webRows = @()
   $rdpRows = @()
 
-  $publicLinux = To-Hashtable $outputs.public_ips.value
-  $privateLinux = To-Hashtable $outputs.private_ips_linux.value
-  $adminLinux = To-Hashtable $outputs.admin_usernames.value
-  foreach ($name in (@($adminLinux.Keys) | Sort-Object)) {
-    $idx = [int]([regex]::Match($name, '\\d+').Value)
-    $rg = ('SASE-LAB{0}' -f $idx)
-    $linuxRows += [pscustomobject]@{
-      ResourceGroup = $rg
-      VMName        = $name
-      Username      = $adminLinux[$name]
-      Password      = $pwds.Linux
-      PublicIP      = $publicLinux[$name]
-      PrivateIP     = $privateLinux[$name]
-      Type          = 'Linux'
+  # Try to read outputs when available; otherwise, synthesize sensible defaults
+  $publicLinux  = To-Hashtable (Try-GetOutputValue $outputs 'public_ips')
+  $privateLinux = To-Hashtable (Try-GetOutputValue $outputs 'private_ips_linux')
+  $adminLinux   = To-Hashtable (Try-GetOutputValue $outputs 'admin_usernames')
+
+  $privateWeb   = To-Hashtable (Try-GetOutputValue $outputs 'private_ips_web')
+  $webAdmins    = Try-GetOutputValue $outputs 'web_vm_admin_usernames'
+
+  $haveLinux = ($adminLinux.Count -gt 0)
+  if ($haveLinux) {
+    foreach ($name in (@($adminLinux.Keys) | Sort-Object)) {
+      $idx = [int]([regex]::Match($name, '\\d+').Value)
+      $rg = ('SASE-LAB{0}' -f $idx)
+      $linuxRows += [pscustomobject]@{
+        ResourceGroup = $rg
+        VMName        = $name
+        Username      = $adminLinux[$name]
+        Password      = $pwds.Linux
+        PublicIP      = $publicLinux[$name]
+        PrivateIP     = $privateLinux[$name]
+        Type          = 'Linux'
+      }
+    }
+  } else {
+    # Synthesize basic rows based on TF defaults so report can be generated without state
+    $count = Get-ResourceCountFromTf $RepoRoot
+    for ($i = 1; $i -le $count; $i++) {
+      $name = ('Srv{0:d2}' -f $i)
+      $rg   = ('SASE-LAB{0}' -f $i)
+      $linuxRows += [pscustomobject]@{
+        ResourceGroup = $rg
+        VMName        = $name
+        Username      = ('SrvUser{0:d2}' -f $i)
+        Password      = $pwds.Linux
+        PublicIP      = ''
+        PrivateIP     = ''
+        Type          = 'Linux'
+      }
     }
   }
 
-  $privateWeb = To-Hashtable $outputs.private_ips_web.value
-  $webAdmins  = $outputs.web_vm_admin_usernames.value
-  foreach ($key in (@($privateWeb.Keys) | Sort-Object)) {
-    $idx = [int]([regex]::Match($key, '\\d+').Value)
-    $rg = ('SASE-LAB{0}' -f $idx)
-    $username = if ($webAdmins.Count -ge $idx) { $webAdmins[$idx-1] } else { "Websrv{0:d2}" -f $idx }
-    $webRows += [pscustomobject]@{
-      ResourceGroup = $rg
-      VMName        = $key
-      Username      = $username
-      Password      = $pwds.Web
-      PublicIP      = ''
-      PrivateIP     = $privateWeb[$key]
-      Type          = 'Web'
+  if ($privateWeb.Count -gt 0 -or ($linuxRows.Count -gt 0)) {
+    # If we have actual web IPs, iterate those keys; otherwise synthesize based on count
+    if ($privateWeb.Count -gt 0) {
+      foreach ($key in (@($privateWeb.Keys) | Sort-Object)) {
+        $idx = [int]([regex]::Match($key, '\\d+').Value)
+        $rg = ('SASE-LAB{0}' -f $idx)
+        $username = if ($webAdmins -and $webAdmins.Count -ge $idx) { $webAdmins[$idx-1] } else { "Websrv{0:d2}" -f $idx }
+        $webRows += [pscustomobject]@{
+          ResourceGroup = $rg
+          VMName        = $key
+          Username      = $username
+          Password      = $pwds.Web
+          PublicIP      = ''
+          PrivateIP     = $privateWeb[$key]
+          Type          = 'Web'
+        }
+      }
+    } else {
+      $count = if ($linuxRows.Count -gt 0) { $linuxRows.Count } else { Get-ResourceCountFromTf $RepoRoot }
+      for ($i = 1; $i -le $count; $i++) {
+        $name = ('Websrv{0:d2}' -f $i)
+        $rg   = ('SASE-LAB{0}' -f $i)
+        $webRows += [pscustomobject]@{
+          ResourceGroup = $rg
+          VMName        = $name
+          Username      = $name
+          Password      = $pwds.Web
+          PublicIP      = ''
+          PrivateIP     = ''
+          Type          = 'Web'
+        }
+      }
     }
   }
 
@@ -401,7 +481,8 @@ if ($ReportOnly -or $Action -eq 'report') {
     $scriptRoot = $PSScriptRoot; if (-not $scriptRoot) { $scriptRoot = Split-Path -Parent $PSCommandPath }
     if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
     $repo = Resolve-Path (Join-Path -Path $scriptRoot -ChildPath '..')
-    $tfExe = Resolve-TerraformExe
+    # Do not force interactive Terraform resolution for report-only; try optional, otherwise continue with synthesized data
+    $tfExe = Try-Resolve-TerraformExeOptional
     Generate-LabReport -TerraformExe $tfExe -RepoRoot $repo -Path $ReportPath -AllowModuleInstall
   } catch {
     Write-Warn "Failed to generate XLSX/CSV report: $($_.Exception.Message)"
