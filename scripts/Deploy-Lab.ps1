@@ -494,35 +494,64 @@ function Generate-LabReport {
   }
 
   # Optional: Enrich missing IPs using Azure CLI when available and logged in
-  function Try-FillLinuxIpsFromAz($rows) {
+  function Try-FillLinuxIpsFromAz($rows, [int]$TimeoutSeconds = 120, [int]$PollIntervalSeconds = 5) {
     if (-not (Test-Command az)) { return }
     # verify login context non-interactively
     try { $null = az account show --only-show-errors 2>$null | Out-Null } catch { return }
+
+    function Get-LinuxIpsForIndex([int]$idx) {
+      $rg  = ('SASE-LAB{0}' -f $idx)
+      $pipName = ('sase_lab_public_ip_{0}' -f $idx)
+      $nicName = ('sase_lab_nic_{0}' -f $idx)
+      $ipconf  = ('sase_lab_ipconfig_{0}' -f $idx)
+      $pub = $null; $priv = $null
+      try {
+        # Prefer reading via NIC -> IP config -> public IP resource
+        $pipId = az network nic ip-config show -g $rg --nic-name $nicName -n $ipconf --query "publicIpAddress.id" -o tsv 2>$null
+        if (-not [string]::IsNullOrWhiteSpace($pipId)) {
+          $pub = az network public-ip show --ids $pipId --query ipAddress -o tsv 2>$null
+        }
+        if ([string]::IsNullOrWhiteSpace($pub)) {
+          # fallback by name
+          $pub = az network public-ip show -g $rg -n $pipName --query ipAddress -o tsv 2>$null
+        }
+        if ([string]::IsNullOrWhiteSpace($pub)) {
+          # fallback via VM inspection
+          $vmName = ('Srv{0:d2}' -f $idx)
+          $pub = az vm list-ip-addresses -g $rg -n $vmName --query "[].virtualMachine.network.publicIpAddresses[0].ipAddress" -o tsv 2>$null
+        }
+      } catch { }
+      try {
+        $priv = az network nic show -g $rg -n $nicName --query "ipConfigurations[0].privateIpAddress" -o tsv 2>$null
+      } catch { }
+      return @{ Public=$pub; Private=$priv }
+    }
+
     foreach ($row in $rows) {
       if (-not $row -or -not $row.VMName) { continue }
       $m = [regex]::Match($row.VMName, '\\d+')
       if (-not $m.Success) { continue }
       $idx = [int]$m.Value
-      $rg  = ('SASE-LAB{0}' -f $idx)
-      # Names as defined in main.tf
-      $pipName = ('sase_lab_public_ip_{0}' -f $idx)
-      $nicName = ('sase_lab_nic_{0}' -f $idx)
-      if (-not $row.PublicIP -or [string]::IsNullOrWhiteSpace($row.PublicIP)) {
+      $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+      while (([string]::IsNullOrWhiteSpace($row.PublicIP) -or [string]::IsNullOrWhiteSpace($row.PrivateIP)) -and (Get-Date) -lt $deadline) {
+        $ips = Get-LinuxIpsForIndex -idx $idx
+        if (-not [string]::IsNullOrWhiteSpace($ips.Public)) { $row.PublicIP = $ips.Public }
+        if (-not [string]::IsNullOrWhiteSpace($ips.Private)) { $row.PrivateIP = $ips.Private }
+        if (-not [string]::IsNullOrWhiteSpace($row.PublicIP) -and -not [string]::IsNullOrWhiteSpace($row.PrivateIP)) { break }
+        Start-Sleep -Seconds $PollIntervalSeconds
+      }
+      # Last-chance fallbacks: list and pick first matching resource if still empty
+      if ([string]::IsNullOrWhiteSpace($row.PublicIP)) {
         try {
-          $pub = az network public-ip show -g $rg -n $pipName --query ipAddress -o tsv 2>$null
-          if ([string]::IsNullOrWhiteSpace($pub)) {
-            # fallback: search PIPs in RG matching prefix
-            $pub = az network public-ip list -g $rg --query "[?starts_with(name,'sase_lab_public_ip_')].ipAddress | [0]" -o tsv 2>$null
-          }
+          $rg  = ('SASE-LAB{0}' -f $idx)
+          $pub = az network public-ip list -g $rg --query "[?starts_with(name,'sase_lab_public_ip_')].ipAddress | [0]" -o tsv 2>$null
           if (-not [string]::IsNullOrWhiteSpace($pub)) { $row.PublicIP = $pub }
         } catch { }
       }
-      if (-not $row.PrivateIP -or [string]::IsNullOrWhiteSpace($row.PrivateIP)) {
+      if ([string]::IsNullOrWhiteSpace($row.PrivateIP)) {
         try {
-          $priv = az network nic show -g $rg -n $nicName --query "ipConfigurations[0].privateIpAddress" -o tsv 2>$null
-          if ([string]::IsNullOrWhiteSpace($priv)) {
-            $priv = az network nic list -g $rg --query "[?starts_with(name,'sase_lab_nic_')].ipConfigurations[0].privateIpAddress | [0]" -o tsv 2>$null
-          }
+          $rg  = ('SASE-LAB{0}' -f $idx)
+          $priv = az network nic list -g $rg --query "[?starts_with(name,'sase_lab_nic_')].ipConfigurations[0].privateIpAddress | [0]" -o tsv 2>$null
           if (-not [string]::IsNullOrWhiteSpace($priv)) { $row.PrivateIP = $priv }
         } catch { }
       }
