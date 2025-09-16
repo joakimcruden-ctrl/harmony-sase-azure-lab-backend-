@@ -421,9 +421,29 @@ function Generate-LabReport {
       }
     }
   } else {
-    # Synthesize basic rows based on TF defaults so report can be generated without state
-    $count = Get-ResourceCountFromTf $RepoRoot
-    for ($i = 1; $i -le $count; $i++) {
+    function Get-LabIndicesFromAz() {
+      if (-not (Test-Command az)) { return @() }
+      try { $null = az account show --only-show-errors 2>$null | Out-Null } catch { return @() }
+      try {
+        $names = az group list --query "[?starts_with(name,'SASE-LAB')].name" -o tsv 2>$null
+        if (-not $names) { return @() }
+        $idxs = @()
+        foreach ($n in ($names -split "`n")) {
+          if ([string]::IsNullOrWhiteSpace($n)) { continue }
+          $m = [regex]::Match($n.Trim(), 'SASE-LAB(\d+)$')
+          if ($m.Success) { $idxs += [int]$m.Groups[1].Value }
+        }
+        return ($idxs | Sort-Object)
+      } catch { return @() }
+    }
+
+    $indices = Get-LabIndicesFromAz
+    if ($indices.Count -eq 0) {
+      # Synthesize based on TF default count when Azure discovery yields nothing
+      $count = Get-ResourceCountFromTf $RepoRoot
+      $indices = 1..$count
+    }
+    foreach ($i in $indices) {
       $name = ('Srv{0:d2}' -f $i)
       $rg   = ('SASE-LAB{0}' -f $i)
       $linuxRows += [pscustomobject]@{
@@ -490,12 +510,19 @@ function Generate-LabReport {
       if (-not $row.PublicIP -or [string]::IsNullOrWhiteSpace($row.PublicIP)) {
         try {
           $pub = az network public-ip show -g $rg -n $pipName --query ipAddress -o tsv 2>$null
+          if ([string]::IsNullOrWhiteSpace($pub)) {
+            # fallback: search PIPs in RG matching prefix
+            $pub = az network public-ip list -g $rg --query "[?starts_with(name,'sase_lab_public_ip_')].ipAddress | [0]" -o tsv 2>$null
+          }
           if (-not [string]::IsNullOrWhiteSpace($pub)) { $row.PublicIP = $pub }
         } catch { }
       }
       if (-not $row.PrivateIP -or [string]::IsNullOrWhiteSpace($row.PrivateIP)) {
         try {
           $priv = az network nic show -g $rg -n $nicName --query "ipConfigurations[0].privateIpAddress" -o tsv 2>$null
+          if ([string]::IsNullOrWhiteSpace($priv)) {
+            $priv = az network nic list -g $rg --query "[?starts_with(name,'sase_lab_nic_')].ipConfigurations[0].privateIpAddress | [0]" -o tsv 2>$null
+          }
           if (-not [string]::IsNullOrWhiteSpace($priv)) { $row.PrivateIP = $priv }
         } catch { }
       }
@@ -570,11 +597,30 @@ function Generate-LabReport {
 }
 
 # ---- Main flow (mirrors wafaas-style execution) ----
+function Ensure-SubscriptionForReport {
+  param([string]$ParamSubId)
+  if (-not (Test-Command az)) { return }
+  $target = $null
+  try { $preset = Get-PresetSubscriptionId -ParamSubId $ParamSubId } catch { $preset = $null }
+  if ($preset) { $target = $preset }
+  else {
+    try { $current = az account show | ConvertFrom-Json; if ($current -and $current.id) { $target = $current.id } } catch { }
+  }
+  if ($target) {
+    try {
+      az account set --subscription $target | Out-Null
+      $env:ARM_SUBSCRIPTION_ID = $target
+      $env:AZURE_SUBSCRIPTION_ID = $target
+    } catch { }
+  }
+}
 if ($ReportOnly -or $Action -eq 'report') {
   try {
     $scriptRoot = $PSScriptRoot; if (-not $scriptRoot) { $scriptRoot = Split-Path -Parent $PSCommandPath }
     if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
     $repo = Resolve-Path (Join-Path -Path $scriptRoot -ChildPath '..')
+    # Try to set subscription context non-interactively for Azure enrichment
+    Ensure-SubscriptionForReport -ParamSubId $SubscriptionId
     # Do not force interactive Terraform resolution for report-only; try optional, otherwise continue with synthesized data
     $tfExe = Try-Resolve-TerraformExeOptional
     Generate-LabReport -TerraformExe $tfExe -RepoRoot $repo -Path $ReportPath -AllowModuleInstall
