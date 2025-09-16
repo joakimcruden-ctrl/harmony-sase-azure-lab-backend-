@@ -167,14 +167,26 @@ function Build-TerraformArgs {
     [switch]$AddRdp
   )
 
+  # Build a temporary tfvars.json file to avoid quoting issues across shells
+  $vars = @{}
+  if ($Count) { $vars.resource_group_count = $Count }
+  if ($Region) { $vars.rdp_location = $Region }
+  if ($RdpAllowedCidrs -and $RdpAllowedCidrs.Count -gt 0) { $vars.rdp_allowed_cidrs = @($RdpAllowedCidrs) }
+  if ($AddRdp.IsPresent) { $vars.enable_rdp = $true }
+
   $args = @()
-  if ($Count) { $args += @('-var', "resource_group_count=$Count") }
-  if ($Region) { $args += @('-var', "rdp_location=`"$Region`"") }
-  if ($RdpAllowedCidrs -and $RdpAllowedCidrs.Count -gt 0) {
-    $cidrs = ($RdpAllowedCidrs | ForEach-Object { '"' + $_ + '"' }) -join ','
-    $args += @('-var', "rdp_allowed_cidrs=[$cidrs]")
+  if ($vars.Count -gt 0) {
+    $scriptRoot = $PSScriptRoot
+    if (-not $scriptRoot) { $scriptRoot = Split-Path -Parent $PSCommandPath }
+    if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
+    $repo = Resolve-Path (Join-Path -Path $scriptRoot -ChildPath '..')
+    $varDir = Join-Path -Path $repo -ChildPath '.terraform'
+    if (-not (Test-Path $varDir)) { New-Item -Path $varDir -ItemType Directory -Force | Out-Null }
+    $varFile = Join-Path -Path $varDir -ChildPath 'generated.auto.tfvars.json'
+    $json = ($vars | ConvertTo-Json -Depth 5)
+    Set-Content -Path $varFile -Value $json -Encoding UTF8
+    $args += @('-var-file', $varFile)
   }
-  if ($AddRdp.IsPresent) { $args += @('-var', 'enable_rdp=true') }
   return $args
 }
 
