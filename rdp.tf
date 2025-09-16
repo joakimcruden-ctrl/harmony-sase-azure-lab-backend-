@@ -9,6 +9,12 @@
 # - Lösenord = BestSecurity1
 ############################################################
 
+variable "enable_rdp" {
+  description = "Set true to deploy the optional SASE-RDPClient resources."
+  type        = bool
+  default     = false
+}
+
 variable "rdp_location" {
   description = "Region för SASE-RDPClient (bör matcha din miljö)."
   type        = string
@@ -35,30 +41,34 @@ variable "rdp_allowed_cidrs" {
 
 # 1) RG
 resource "azurerm_resource_group" "rdp_rg" {
+  count    = var.enable_rdp ? 1 : 0
   name     = "SASE-RDPClient"
   location = var.rdp_location
 }
 
 # 2) VNet + Subnet (172.16.0.0/12 -> /16)
 resource "azurerm_virtual_network" "rdp_vnet" {
+  count               = var.enable_rdp ? 1 : 0
   name                = "${var.rdp_prefix}-vnet"
-  resource_group_name = azurerm_resource_group.rdp_rg.name
-  location            = azurerm_resource_group.rdp_rg.location
+  resource_group_name = azurerm_resource_group.rdp_rg[0].name
+  location            = azurerm_resource_group.rdp_rg[0].location
   address_space       = ["172.16.0.0/12"]
 }
 
 resource "azurerm_subnet" "rdp_clients_subnet" {
+  count                = var.enable_rdp ? 1 : 0
   name                 = "clients-subnet"
-  resource_group_name  = azurerm_resource_group.rdp_rg.name
-  virtual_network_name = azurerm_virtual_network.rdp_vnet.name
+  resource_group_name  = azurerm_resource_group.rdp_rg[0].name
+  virtual_network_name = azurerm_virtual_network.rdp_vnet[0].name
   address_prefixes     = ["172.16.0.0/16"]
 }
 
 # 3) NSG + association (RDP)
 resource "azurerm_network_security_group" "rdp_nsg" {
+  count               = var.enable_rdp ? 1 : 0
   name                = "${var.rdp_prefix}-nsg"
-  resource_group_name = azurerm_resource_group.rdp_rg.name
-  location            = azurerm_resource_group.rdp_rg.location
+  resource_group_name = azurerm_resource_group.rdp_rg[0].name
+  location            = azurerm_resource_group.rdp_rg[0].location
 
   security_rule {
     name                       = "allow_rdp"
@@ -74,30 +84,31 @@ resource "azurerm_network_security_group" "rdp_nsg" {
 }
 
 resource "azurerm_subnet_network_security_group_association" "rdp_subnet_nsg" {
-  subnet_id                 = azurerm_subnet.rdp_clients_subnet.id
-  network_security_group_id = azurerm_network_security_group.rdp_nsg.id
+  count                      = var.enable_rdp ? 1 : 0
+  subnet_id                  = azurerm_subnet.rdp_clients_subnet[0].id
+  network_security_group_id  = azurerm_network_security_group.rdp_nsg[0].id
 }
 
 # 4) Publika IP (en per klient) — antal = resource_group_count
 resource "azurerm_public_ip" "rdp_pip" {
-  count               = var.resource_group_count
+  count               = var.enable_rdp ? var.resource_group_count : 0
   name                = format("${var.rdp_prefix}-vm%02d-pip", count.index + 1)
-  location            = azurerm_resource_group.rdp_rg.location
-  resource_group_name = azurerm_resource_group.rdp_rg.name
+  location            = azurerm_resource_group.rdp_rg[0].location
+  resource_group_name = azurerm_resource_group.rdp_rg[0].name
   allocation_method   = "Static"
   sku                 = "Standard"
 }
 
 # 5) NIC per klient
 resource "azurerm_network_interface" "rdp_nic" {
-  count               = var.resource_group_count
+  count               = var.enable_rdp ? var.resource_group_count : 0
   name                = format("${var.rdp_prefix}-vm%02d-nic", count.index + 1)
-  location            = azurerm_resource_group.rdp_rg.location
-  resource_group_name = azurerm_resource_group.rdp_rg.name
+  location            = azurerm_resource_group.rdp_rg[0].location
+  resource_group_name = azurerm_resource_group.rdp_rg[0].name
 
   ip_configuration {
     name                          = "primary"
-    subnet_id                     = azurerm_subnet.rdp_clients_subnet.id
+    subnet_id                     = azurerm_subnet.rdp_clients_subnet[0].id
     private_ip_address_allocation = "Dynamic"
     public_ip_address_id          = azurerm_public_ip.rdp_pip[count.index].id
   }
@@ -105,11 +116,11 @@ resource "azurerm_network_interface" "rdp_nic" {
 
 # 6) Windows 11-klienter (Enterprise N 22H2)
 resource "azurerm_windows_virtual_machine" "rdp_vm" {
-  count               = var.resource_group_count
+  count               = var.enable_rdp ? var.resource_group_count : 0
   name                = format("${var.rdp_prefix}-vm%02d", count.index + 1)
   computer_name       = format("RDPVM%02d", count.index + 1) # <= max 15 tecken
-  resource_group_name = azurerm_resource_group.rdp_rg.name
-  location            = azurerm_resource_group.rdp_rg.location
+  resource_group_name = azurerm_resource_group.rdp_rg[0].name
+  location            = azurerm_resource_group.rdp_rg[0].location
   network_interface_ids = [
     azurerm_network_interface.rdp_nic[count.index].id
   ]
@@ -140,19 +151,19 @@ resource "azurerm_windows_virtual_machine" "rdp_vm" {
 
 # 7) Outputs
 output "rdp_public_ips" {
-  description = "Publika IP:n för Windows 11-klienterna i SASE-RDPClient."
+  description = "Publika IP:n för Windows 11-klienterna i SASE-RDPClient. (empty when enable_rdp=false)"
   value       = azurerm_public_ip.rdp_pip[*].ip_address
 }
 
 output "rdp_mstsc_commands" {
-  description = "Färdiga RDP-kommandon (Windows)."
+  description = "Färdiga RDP-kommandon (Windows). (empty when enable_rdp=false)"
   value       = [for ip in azurerm_public_ip.rdp_pip[*].ip_address : "mstsc /v:${ip}:3389"]
 }
 
 
 # 8) Output: karta över användarnamn -> IP (inkl. VM-namn och mstsc)
 output "rdp_clients" {
-  description = "Mappar UserXX till publikt IP, VM-namn och färdigt mstsc-kommando."
+  description = "Mappar UserXX till publikt IP, VM-namn och färdigt mstsc-kommando. (empty when enable_rdp=false)"
   value = {
     for idx, ip in azurerm_public_ip.rdp_pip[*].ip_address :
     format("User%02d", idx + 1) => {

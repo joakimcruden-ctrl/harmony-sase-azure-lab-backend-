@@ -30,6 +30,7 @@
 - **Subscription:** Provider sets `subscription_id` in `main.tf`. Prefer overriding via env/CLI to avoid hardcoding.
 - **Region:** `location` is specified per resource in `main.tf` (default "Sweden Central"). Adjust to your nearest region.
 - **RDP Module Vars:** In `rdp.tf` you can set `rdp_location`, `rdp_prefix`, `rdp_vm_size`, `rdp_allowed_cidrs` (default `0.0.0.0/0`; tighten this).
+  - Toggle with `enable_rdp` (default `false`). The PowerShell `-AddRdp` flag sets this for you.
 
 Examples:
 
@@ -55,7 +56,8 @@ Examples:
 - Run via `scripts/Deploy-Lab.ps1` for a streamlined flow (prereq checks, login, subscription selection, Terraform run):
   - Plan: `pwsh scripts/Deploy-Lab.ps1 -Action plan -Count 3`
   - Apply: `pwsh scripts/Deploy-Lab.ps1 -Action apply -Count 3 -AutoApprove`
-  - Destroy: `pwsh scripts/Deploy-Lab.ps1 -Action destroy -AutoApprove`
+  - Destroy/Delete: `pwsh scripts/Deploy-Lab.ps1 -Action destroy -AutoApprove` or `-Action delete`
+  - Add RDP clients: append `-AddRdp` to include the optional `SASE-RDPClient` stack (disabled by default)
   - Optional params: `-SubscriptionId <GUID>`, `-Region "Sweden Central"`, `-RdpAllowedCidrs @("203.0.113.4/32")`
 
 **Credentials and Access**

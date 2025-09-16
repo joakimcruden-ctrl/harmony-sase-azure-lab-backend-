@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("plan", "apply", "destroy")]
+  [ValidateSet("plan", "apply", "destroy", "delete")]
   [string]$Action = "apply",
 
   [int]$Count,
@@ -10,7 +10,9 @@ param(
 
   [switch]$AutoApprove,
 
-  [string]$SubscriptionId
+  [string]$SubscriptionId,
+
+  [switch]$AddRdp
 )
 
 Set-StrictMode -Version Latest
@@ -59,7 +61,8 @@ function Build-TerraformArgs {
     [int]$Count,
     [string]$Region,
     [string[]]$RdpAllowedCidrs,
-    [string]$SubscriptionId
+    [string]$SubscriptionId,
+    [switch]$AddRdp
   )
 
   $args = @()
@@ -70,6 +73,7 @@ function Build-TerraformArgs {
     $args += @('-var', "rdp_allowed_cidrs=[$cidrs]")
   }
   if ($SubscriptionId) { $args += @('-var', "subscription_id=$SubscriptionId") }
+  if ($AddRdp.IsPresent) { $args += @('-var', 'enable_rdp=true') }
   return $args
 }
 
@@ -116,8 +120,9 @@ function Invoke-Terraform {
 Ensure-Prereqs
 Ensure-AzLogin
 $activeSub = Select-Subscription -SubId $SubscriptionId
-$tfArgs = Build-TerraformArgs -Count $Count -Region $Region -RdpAllowedCidrs $RdpAllowedCidrs -SubscriptionId $activeSub
+$tfArgs = Build-TerraformArgs -Count $Count -Region $Region -RdpAllowedCidrs $RdpAllowedCidrs -SubscriptionId $activeSub -AddRdp:$AddRdp
+# Normalize alias
+if ($Action -eq 'delete') { $Action = 'destroy' }
 Invoke-Terraform -Action $Action -ExtraArgs $tfArgs -AutoApprove:$AutoApprove
 
 Write-Info "Done. Use 'terraform output' to inspect results."
-
