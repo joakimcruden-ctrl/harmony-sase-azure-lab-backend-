@@ -184,7 +184,8 @@ function Build-TerraformArgs {
     if (-not (Test-Path $varDir)) { New-Item -Path $varDir -ItemType Directory -Force | Out-Null }
     $varFile = Join-Path -Path $varDir -ChildPath 'generated.auto.tfvars.json'
     $json = ($vars | ConvertTo-Json -Depth 5)
-    Set-Content -Path $varFile -Value $json -Encoding UTF8
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($varFile, $json, $utf8NoBom)
     $args += @('-var-file', $varFile)
   }
   return $args
