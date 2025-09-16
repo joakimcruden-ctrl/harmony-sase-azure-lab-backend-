@@ -396,7 +396,12 @@ function Generate-LabReport {
   $adminLinux   = To-Hashtable (Try-GetOutputValue $outputs 'admin_usernames')
 
   $privateWeb   = To-Hashtable (Try-GetOutputValue $outputs 'private_ips_web')
-  $webAdmins    = Try-GetOutputValue $outputs 'web_vm_admin_usernames'
+  $webAdminsRaw = Try-GetOutputValue $outputs 'web_vm_admin_usernames'
+  $webAdmins    = @()
+  if ($null -ne $webAdminsRaw) {
+    if ($webAdminsRaw -is [System.Array]) { $webAdmins = @($webAdminsRaw | Where-Object { $_ -ne $null -and $_ -ne '' }) }
+    else { $webAdmins = @($webAdminsRaw) | Where-Object { $_ -ne $null -and $_ -ne '' } }
+  }
 
   # Determine desired count/prefix/enablement from generated vars or defaults
   $genVars = Read-GeneratedVars $RepoRoot
@@ -437,13 +442,13 @@ function Generate-LabReport {
       } catch { return @() }
     }
 
-    $indices = Get-LabIndicesFromAz
-    if ($indices.Count -eq 0) {
+    $indices = @((Get-LabIndicesFromAz))
+    if (@($indices).Count -eq 0) {
       # Synthesize based on TF default count when Azure discovery yields nothing
       $count = Get-ResourceCountFromTf $RepoRoot
-      $indices = 1..$count
+      $indices = @(1..$count)
     }
-    foreach ($i in $indices) {
+    foreach ($i in @($indices)) {
       $name = ('Srv{0:d2}' -f $i)
       $rg   = ('SASE-LAB{0}' -f $i)
       $linuxRows += [pscustomobject]@{
