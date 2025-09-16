@@ -297,14 +297,22 @@ function Generate-LabReport {
   $outputs = Get-TerraformOutputs -TerraformExe $TerraformExe -RepoRoot $RepoRoot
   $pwds = Get-PasswordsFromTf -RepoRoot $RepoRoot
 
+  function To-Hashtable($obj) {
+    if ($null -eq $obj) { return @{} }
+    if ($obj -is [hashtable]) { return $obj }
+    $ht = @{}
+    $obj.PSObject.Properties | ForEach-Object { $ht[$_.Name] = $_.Value }
+    return $ht
+  }
+
   $linuxRows = @()
   $webRows = @()
   $rdpRows = @()
 
-  $publicLinux = $outputs.public_ips.value
-  $privateLinux = $outputs.private_ips_linux.value
-  $adminLinux = $outputs.admin_usernames.value
-  foreach ($name in ($adminLinux.Keys | Sort-Object)) {
+  $publicLinux = To-Hashtable $outputs.public_ips.value
+  $privateLinux = To-Hashtable $outputs.private_ips_linux.value
+  $adminLinux = To-Hashtable $outputs.admin_usernames.value
+  foreach ($name in (@($adminLinux.Keys) | Sort-Object)) {
     $idx = [int]([regex]::Match($name, '\\d+').Value)
     $rg = ('SASE-LAB{0}' -f $idx)
     $linuxRows += [pscustomobject]@{
@@ -318,9 +326,9 @@ function Generate-LabReport {
     }
   }
 
-  $privateWeb = $outputs.private_ips_web.value
+  $privateWeb = To-Hashtable $outputs.private_ips_web.value
   $webAdmins  = $outputs.web_vm_admin_usernames.value
-  foreach ($key in ($privateWeb.Keys | Sort-Object)) {
+  foreach ($key in (@($privateWeb.Keys) | Sort-Object)) {
     $idx = [int]([regex]::Match($key, '\\d+').Value)
     $rg = ('SASE-LAB{0}' -f $idx)
     $username = if ($webAdmins.Count -ge $idx) { $webAdmins[$idx-1] } else { "Websrv{0:d2}" -f $idx }
