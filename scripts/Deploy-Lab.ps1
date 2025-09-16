@@ -27,9 +27,8 @@ function Test-Command($name) {
 }
 
 function Ensure-Prereqs {
-  Write-Info "Checking prerequisites (az, terraform)..."
+  Write-Info "Checking prerequisites (az)..."
   if (-not (Test-Command az)) { throw "Azure CLI ('az') is required. Install from https://aka.ms/azcli" }
-  if (-not (Test-Command terraform)) { throw "Terraform is required. Install from https://www.terraform.io/downloads.html" }
 }
 
 function Ensure-AzLogin {
@@ -39,6 +38,28 @@ function Ensure-AzLogin {
   } catch {
     Write-Warn "Not logged in. Launching 'az login'..."
     az login | Out-Null
+  }
+}
+
+function Resolve-TerraformExe {
+  # Order: explicit env var, PATH, then interactive prompt for full path
+  $envVars = @('TF_EXE', 'TERRAFORM_EXE', 'TERRAFORM_PATH')
+  foreach ($name in $envVars) {
+    $val = (Get-Item -Path Env:$name -ErrorAction SilentlyContinue).Value
+    if ($val) {
+      if (Test-Path $val) { Write-Info "Using Terraform from env '$name': $val"; return $val }
+      Write-Warn "Env $name is set but path not found: $val"
+    }
+  }
+
+  if (Test-Command terraform) { return 'terraform' }
+
+  Write-Warn "Terraform not found on PATH and no env override set."
+  while ($true) {
+    $path = Read-Host "Enter full path to Terraform executable (e.g., C:\\tools\\terraform.exe or /usr/local/bin/terraform)"
+    if ([string]::IsNullOrWhiteSpace($path)) { Write-Warn "Path cannot be empty."; continue }
+    if (Test-Path $path) { return $path }
+    Write-Warn "Path does not exist: $path"
   }
 }
 
@@ -160,7 +181,8 @@ function Invoke-Terraform {
   param(
     [string]$Action,
     [string[]]$ExtraArgs,
-    [switch]$AutoApprove
+    [switch]$AutoApprove,
+    [string]$TerraformExe
   )
 
   $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -169,25 +191,25 @@ function Invoke-Terraform {
   try {
     if (-not (Test-Path ".terraform")) {
       Write-Info "terraform init"
-      terraform init | Write-Host
+      & $TerraformExe init | Write-Host
     }
 
     switch ($Action) {
       'plan' {
         Write-Info "terraform plan $($ExtraArgs -join ' ')"
-        terraform plan @ExtraArgs | Write-Host
+        & $TerraformExe plan @ExtraArgs | Write-Host
       }
       'apply' {
         $args = @('apply') + $ExtraArgs
         if ($AutoApprove) { $args += '-auto-approve' }
         Write-Info "terraform $($args -join ' ')"
-        terraform @args | Write-Host
+        & $TerraformExe @args | Write-Host
       }
       'destroy' {
         $args = @('destroy') + $ExtraArgs
         if ($AutoApprove) { $args += '-auto-approve' }
         Write-Info "terraform $($args -join ' ')"
-        terraform @args | Write-Host
+        & $TerraformExe @args | Write-Host
       }
       default { throw "Unknown action: $Action" }
     }
@@ -202,6 +224,7 @@ $activeSub = Resolve-Subscription -ParamSubId $SubscriptionId
 $tfArgs = Build-TerraformArgs -Count $Count -Region $Region -RdpAllowedCidrs $RdpAllowedCidrs -AddRdp:$AddRdp
 # Normalize alias
 if ($Action -eq 'delete') { $Action = 'destroy' }
-Invoke-Terraform -Action $Action -ExtraArgs $tfArgs -AutoApprove:$AutoApprove
+$tfExe = Resolve-TerraformExe
+Invoke-Terraform -Action $Action -ExtraArgs $tfArgs -AutoApprove:$AutoApprove -TerraformExe $tfExe
 
 Write-Info "Done. Use 'terraform output' to inspect results."

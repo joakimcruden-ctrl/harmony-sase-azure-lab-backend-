@@ -65,6 +65,11 @@ Subscription selection mirrors the referenced project:
 - Preset sources checked in order: CLI param `-SubscriptionId` (optional), env `ARM_SUBSCRIPTION_ID` or `AZURE_SUBSCRIPTION_ID`, then local files `subscription.json` (with `subscriptionId`), `.azure-subscription` (plain GUID), `config/subscription.json`, or `scripts/subscription.json`.
 - If none found, the script uses the current `az` default; if none, it lists available subscriptions and prompts you to pick one, then runs Terraform under that context. You don’t need to pass a subscription on the command line.
 
+Terraform executable resolution:
+- Checks env overrides `TF_EXE`, `TERRAFORM_EXE`, or `TERRAFORM_PATH`. If one points to a valid file, it is used.
+- If not set but `terraform` exists on PATH, that is used.
+- Otherwise, the script prompts you to enter the full path to `terraform(.exe)` and uses it for this run.
+
 **Credentials and Access**
 
 - **Linux VMs:** Username `SrvUserXX`, password `BestSecurity1`.
