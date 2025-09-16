@@ -61,6 +61,7 @@ Examples:
   - Add RDP clients: append `-AddRdp` to include the optional `SASE-RDPClient` stack (disabled by default)
   - Optional params: `-SubscriptionId <GUID>`, `-Region "Sweden Central"`, `-RdpAllowedCidrs @("203.0.113.4/32")`
   - Report: add `-ReportPath reports/LabUsers.xlsx` to save a formatted XLSX after apply. If the ImportExcel module is not available, the script attempts to install it; otherwise CSV fallbacks are created.
+  - Report-only (no deploy): `pwsh scripts/Deploy-Lab.ps1 -Action report -ReportPath reports/LabUsers.xlsx` (or `-ReportOnly`) to generate the XLSX/CSV from existing Terraform state without planning/applying.
 
 Subscription selection mirrors the referenced project:
 - Preset sources checked in order: CLI param `-SubscriptionId` (optional), env `ARM_SUBSCRIPTION_ID` or `AZURE_SUBSCRIPTION_ID`, then local files `subscription.json` (with `subscriptionId`), `.azure-subscription` (plain GUID), `config/subscription.json`, or `scripts/subscription.json`.

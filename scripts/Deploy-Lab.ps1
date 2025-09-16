@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("plan", "apply", "destroy", "delete")]
+  [ValidateSet("plan", "apply", "destroy", "delete", "report")]
   [string]$Action = "apply",
 
   [int]$Count,
@@ -14,7 +14,9 @@ param(
 
   [switch]$AddRdp,
 
-  [string]$ReportPath
+  [string]$ReportPath,
+
+  [switch]$ReportOnly
 )
 
 Set-StrictMode -Version Latest
@@ -343,9 +345,9 @@ function Generate-LabReport {
     }
   }
 
-  if ($outputs.PSObject.Properties.Name -contains 'rdp_clients') {
-    $rdpMap = $outputs.rdp_clients.value
-    foreach ($user in ($rdpMap.Keys | Sort-Object)) {
+  if ($outputs -and ($outputs.PSObject.Properties.Name -contains 'rdp_clients')) {
+    $rdpMap = To-Hashtable $outputs.rdp_clients.value
+    foreach ($user in (@($rdpMap.Keys) | Sort-Object)) {
       $row = $rdpMap[$user]
       $rdpRows += [pscustomobject]@{
         ResourceGroup = 'SASE-RDPClient'
@@ -394,6 +396,19 @@ function Generate-LabReport {
 }
 
 # ---- Main flow (mirrors wafaas-style execution) ----
+if ($ReportOnly -or $Action -eq 'report') {
+  try {
+    $scriptRoot = $PSScriptRoot; if (-not $scriptRoot) { $scriptRoot = Split-Path -Parent $PSCommandPath }
+    if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
+    $repo = Resolve-Path (Join-Path -Path $scriptRoot -ChildPath '..')
+    $tfExe = Resolve-TerraformExe
+    Generate-LabReport -TerraformExe $tfExe -RepoRoot $repo -Path $ReportPath -AllowModuleInstall
+  } catch {
+    Write-Warn "Failed to generate XLSX/CSV report: $($_.Exception.Message)"
+  }
+  return
+}
+
 Ensure-Prereqs
 Ensure-AzLogin
 $activeSub = Resolve-Subscription -ParamSubId $SubscriptionId
