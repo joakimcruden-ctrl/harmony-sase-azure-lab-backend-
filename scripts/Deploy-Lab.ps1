@@ -349,6 +349,47 @@ function Generate-LabReport {
   $webRows = @()
   $rdpRows = @()
 
+  function Read-GeneratedVars([string]$root) {
+    $result = @{}
+    try {
+      $gen = Join-Path $root '.terraform/generated.auto.tfvars.json'
+      if (Test-Path $gen) {
+        $obj = Get-Content $gen -Raw | ConvertFrom-Json
+        if ($obj.PSObject.Properties.Name -contains 'resource_group_count') { $result.resource_group_count = [int]$obj.resource_group_count }
+        if ($obj.PSObject.Properties.Name -contains 'enable_rdp') { $result.enable_rdp = [bool]$obj.enable_rdp }
+        if ($obj.PSObject.Properties.Name -contains 'rdp_prefix') { $result.rdp_prefix = [string]$obj.rdp_prefix }
+      }
+    } catch { }
+    try {
+      $tfvarsJson = Join-Path $root 'terraform.tfvars.json'
+      if (-not $result.ContainsKey('resource_group_count') -and (Test-Path $tfvarsJson)) {
+        $obj2 = Get-Content $tfvarsJson -Raw | ConvertFrom-Json
+        if ($obj2.PSObject.Properties.Name -contains 'resource_group_count') { $result.resource_group_count = [int]$obj2.resource_group_count }
+        if ($obj2.PSObject.Properties.Name -contains 'enable_rdp') { $result.enable_rdp = [bool]$obj2.enable_rdp }
+        if ($obj2.PSObject.Properties.Name -contains 'rdp_prefix') { $result.rdp_prefix = [string]$obj2.rdp_prefix }
+      }
+    } catch { }
+    return $result
+  }
+
+  function Get-RdpPrefixFromTf([string]$root) {
+    try {
+      $rdp = Get-Content (Join-Path $root 'rdp.tf') -Raw
+      $m = [regex]::Match($rdp, 'variable\s+"rdp_prefix"[\s\S]*?default\s*=\s*"([^"]+)"', 'Singleline')
+      if ($m.Success) { return $m.Groups[1].Value }
+    } catch { }
+    return 'SASE-RDPClient'
+  }
+
+  function Get-EnableRdpDefaultFromTf([string]$root) {
+    try {
+      $rdp = Get-Content (Join-Path $root 'rdp.tf') -Raw
+      $m = [regex]::Match($rdp, 'variable\s+"enable_rdp"[\s\S]*?default\s*=\s*(true|false)', 'Singleline')
+      if ($m.Success) { return [bool]::Parse($m.Groups[1].Value) }
+    } catch { }
+    return $false
+  }
+
   # Try to read outputs when available; otherwise, synthesize sensible defaults
   $publicLinux  = To-Hashtable (Try-GetOutputValue $outputs 'public_ips')
   $privateLinux = To-Hashtable (Try-GetOutputValue $outputs 'private_ips_linux')
@@ -356,6 +397,13 @@ function Generate-LabReport {
 
   $privateWeb   = To-Hashtable (Try-GetOutputValue $outputs 'private_ips_web')
   $webAdmins    = Try-GetOutputValue $outputs 'web_vm_admin_usernames'
+
+  # Determine desired count/prefix/enablement from generated vars or defaults
+  $genVars = Read-GeneratedVars $RepoRoot
+  $defaultCount = Get-ResourceCountFromTf $RepoRoot
+  $countForSynthesis = if ($genVars.ContainsKey('resource_group_count')) { [int]$genVars.resource_group_count } else { $defaultCount }
+  $rdpPrefix = if ($genVars.ContainsKey('rdp_prefix')) { $genVars.rdp_prefix } else { Get-RdpPrefixFromTf $RepoRoot }
+  $enableRdpConfigured = if ($genVars.ContainsKey('enable_rdp')) { [bool]$genVars.enable_rdp } else { Get-EnableRdpDefaultFromTf $RepoRoot }
 
   $haveLinux = ($adminLinux.Count -gt 0)
   if ($haveLinux) {
@@ -435,6 +483,21 @@ function Generate-LabReport {
         Username      = $user
         Password      = $pwds.Rdp
         PublicIP      = $row.ip
+        PrivateIP     = ''
+        Type          = 'RDP-Client'
+      }
+    }
+  } elseif ($enableRdpConfigured -and $countForSynthesis -gt 0) {
+    # Synthesize RDP rows when enabled but no outputs available
+    for ($i = 1; $i -le $countForSynthesis; $i++) {
+      $uname = ('User{0:d2}' -f $i)
+      $vm    = ('{0}-vm{1:d2}' -f $rdpPrefix, $i)
+      $rdpRows += [pscustomobject]@{
+        ResourceGroup = 'SASE-RDPClient'
+        VMName        = $vm
+        Username      = $uname
+        Password      = $pwds.Rdp
+        PublicIP      = ''
         PrivateIP     = ''
         Type          = 'RDP-Client'
       }
