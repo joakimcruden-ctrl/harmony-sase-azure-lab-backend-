@@ -71,11 +71,12 @@ function Get-PresetSubscriptionId {
   if ($env:ARM_SUBSCRIPTION_ID) { return $env:ARM_SUBSCRIPTION_ID }
   if ($env:AZURE_SUBSCRIPTION_ID) { return $env:AZURE_SUBSCRIPTION_ID }
 
+  $base = (Get-Location).Path
   $candidates = @(
-    Join-Path (Get-Location) 'subscription.json',
-    Join-Path (Get-Location) '.azure-subscription',
-    Join-Path (Get-Location) 'config/subscription.json',
-    Join-Path (Get-Location) 'scripts/subscription.json'
+    (Join-Path -Path $base -ChildPath 'subscription.json')
+    (Join-Path -Path $base -ChildPath '.azure-subscription')
+    (Join-Path -Path $base -ChildPath 'config/subscription.json')
+    (Join-Path -Path $base -ChildPath 'scripts/subscription.json')
   )
 
   foreach ($path in $candidates) {
