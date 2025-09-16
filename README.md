@@ -50,6 +50,14 @@ Examples:
   - `web_vm_admin_usernames`: List of web server admin usernames.
   - `rdp_public_ips`, `rdp_mstsc_commands`, `rdp_clients` (when `rdp.tf` is included).
 
+**PowerShell Runner**
+
+- Run via `scripts/Deploy-Lab.ps1` for a streamlined flow (prereq checks, login, subscription selection, Terraform run):
+  - Plan: `pwsh scripts/Deploy-Lab.ps1 -Action plan -Count 3`
+  - Apply: `pwsh scripts/Deploy-Lab.ps1 -Action apply -Count 3 -AutoApprove`
+  - Destroy: `pwsh scripts/Deploy-Lab.ps1 -Action destroy -AutoApprove`
+  - Optional params: `-SubscriptionId <GUID>`, `-Region "Sweden Central"`, `-RdpAllowedCidrs @("203.0.113.4/32")`
+
 **Credentials and Access**
 
 - **Linux VMs:** Username `SrvUserXX`, password `BestSecurity1`.
@@ -96,4 +104,3 @@ Examples:
 **License**
 
 - No explicit license included. Add a LICENSE file if you plan to distribute.
-

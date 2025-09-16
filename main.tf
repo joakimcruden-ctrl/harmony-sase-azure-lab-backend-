@@ -5,10 +5,18 @@ variable "resource_group_count" {
   type        = number
   default     = 12
 }
+ 
+# Optional: allow setting the subscription via variable
+variable "subscription_id" {
+  description = "Azure Subscription ID to use. If null, Azure CLI or ARM_ env vars will be used."
+  type        = string
+  default     = null
+}
 #set your own subscription ID
 provider "azurerm" {
   features {}
-  subscription_id = "ff155c65-757b-4033-936b-a391274bf95a"
+  # If null, provider will fall back to Azure CLI or ARM_* environment variables
+  subscription_id = var.subscription_id
 }
 
 resource "azurerm_resource_group" "sase_lab" {
