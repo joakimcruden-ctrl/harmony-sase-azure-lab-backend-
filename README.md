@@ -1,5 +1,13 @@
 **Harmony SASE Azure Lab (Terraform)**
 
+**Example Commands**
+
+- **Deploy assets for 3 users, including rdp client VMs and allow any IP connecting to the RDP machines.**
+- powershell -ExecutionPolicy Bypass -File .\scripts\Deploy-Lab.ps1 -Action apply -AddRdp -Count 3 -Region "Sweden Central" -RdpAllowedCidrs @("0.0.0.0/0") -AutoApprove
+
+- **Delete all deployed assets for the lab in Azure**
+- powershell -ExecutionPolicy Bypass -File .\scripts\Deploy-Lab.ps1 -Action delete
+
 - **Purpose:** Provision a multi-environment Azure lab for SASE demos and trainings. Each environment includes a Linux VM (for connector/utility use), a simple web server VM, and supporting networking. An optional RDP client resource group provides Windows 11 VMs for user simulation.
 - **Tech:** Terraform + AzureRM provider.
 
