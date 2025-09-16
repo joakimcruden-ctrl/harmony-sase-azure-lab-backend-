@@ -464,7 +464,7 @@ function Generate-LabReport {
       foreach ($key in (@($privateWeb.Keys) | Sort-Object)) {
         $idx = [int]([regex]::Match($key, '\\d+').Value)
         $rg = ('SASE-LAB{0}' -f $idx)
-        $username = if ($webAdmins -and $webAdmins.Count -ge $idx) { $webAdmins[$idx-1] } else { "Websrv{0:d2}" -f $idx }
+        $username = if ($webAdmins -and @($webAdmins).Count -ge $idx) { @($webAdmins)[$idx-1] } else { "Websrv{0:d2}" -f $idx }
         $webRows += [pscustomobject]@{
           ResourceGroup = $rg
           VMName        = $key
