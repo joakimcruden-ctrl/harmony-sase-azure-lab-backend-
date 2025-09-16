@@ -77,7 +77,9 @@ resource "azurerm_network_interface" "sase_lab_nic" {
   ip_configuration {
     name                          = "sase_lab_ipconfig_${count.index + 1}"
     subnet_id                     = azurerm_subnet.sase_lab_subnet[count.index].id
-    private_ip_address_allocation = "Dynamic"
+    # Ensure deterministic private IPs: Linux VM always .4 in its /24
+    private_ip_address_allocation = "Static"
+    private_ip_address            = cidrhost(azurerm_subnet.sase_lab_subnet[count.index].address_prefixes[0], 4)
     public_ip_address_id          = azurerm_public_ip.sase_lab_public_ip[count.index].id
   }
 }
@@ -122,7 +124,9 @@ resource "azurerm_network_interface" "sase_lab_web_nic" {
   ip_configuration {
     name                          = "sase_lab_web_ipconfig_${count.index + 1}"
     subnet_id                     = azurerm_subnet.sase_lab_subnet[count.index].id
-    private_ip_address_allocation = "Dynamic"
+    # Ensure deterministic private IPs: Web VM always .5 in its /24
+    private_ip_address_allocation = "Static"
+    private_ip_address            = cidrhost(azurerm_subnet.sase_lab_subnet[count.index].address_prefixes[0], 5)
   }
 }
 
