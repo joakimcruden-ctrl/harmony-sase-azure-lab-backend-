@@ -45,8 +45,8 @@ function Resolve-TerraformExe {
   # Order: explicit env var, PATH, then interactive prompt for full path
   $envVars = @('TF_EXE', 'TERRAFORM_EXE', 'TERRAFORM_PATH')
   foreach ($name in $envVars) {
-    $val = (Get-Item -Path Env:$name -ErrorAction SilentlyContinue).Value
-    if ($val) {
+    $val = [System.Environment]::GetEnvironmentVariable($name)
+    if (-not [string]::IsNullOrWhiteSpace($val)) {
       if (Test-Path $val) { Write-Info "Using Terraform from env '$name': $val"; return $val }
       Write-Warn "Env $name is set but path not found: $val"
     }
