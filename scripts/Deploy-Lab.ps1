@@ -237,6 +237,9 @@ function Invoke-Terraform {
 Ensure-Prereqs
 Ensure-AzLogin
 $activeSub = Resolve-Subscription -ParamSubId $SubscriptionId
+# Ensure Terraform provider can read the subscription from environment
+$env:ARM_SUBSCRIPTION_ID = $activeSub
+$env:AZURE_SUBSCRIPTION_ID = $activeSub
 $tfArgs = Build-TerraformArgs -Count $Count -Region $Region -RdpAllowedCidrs $RdpAllowedCidrs -AddRdp:$AddRdp
 # Normalize alias
 if ($Action -eq 'delete') { $Action = 'destroy' }
