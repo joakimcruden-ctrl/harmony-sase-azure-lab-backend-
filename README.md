@@ -61,7 +61,11 @@ Examples:
   - Add RDP clients: append `-AddRdp` to include the optional `SASE-RDPClient` stack (disabled by default)
   - Optional params: `-SubscriptionId <GUID>`, `-Region "Sweden Central"`, `-RdpAllowedCidrs @("203.0.113.4/32")`
   - Report: add `-ReportPath reports/LabUsers.xlsx` to save a formatted XLSX after apply. If the ImportExcel module is not available, the script attempts to install it; otherwise CSV fallbacks are created.
-  - Report-only (no deploy): `pwsh scripts/Deploy-Lab.ps1 -Action report -ReportPath reports/LabUsers.xlsx` (or `-ReportOnly`) to generate the XLSX/CSV from existing Terraform state without planning/applying.
+  - Report-only (no deploy): `pwsh scripts/Deploy-Lab.ps1 -ReportOnly -ReportPath reports/LabUsers.xlsx`
+    - Non‑interactive: report-only no longer prompts for Terraform and works even without state.
+    - With state: uses real Terraform outputs for IPs and usernames.
+    - Without state: synthesizes rows from defaults in `main.tf`/`rdp.tf`; IPs are left blank.
+    - RDP rows in report-only: appear when RDP is enabled via config (see “Report-Only RDP” below).
 
 Subscription selection mirrors the referenced project:
 - Preset sources checked in order: CLI param `-SubscriptionId` (optional), env `ARM_SUBSCRIPTION_ID` or `AZURE_SUBSCRIPTION_ID`, then local files `subscription.json` (with `subscriptionId`), `.azure-subscription` (plain GUID), `config/subscription.json`, or `scripts/subscription.json`.
@@ -81,6 +85,16 @@ Terraform executable resolution:
 - **Path:** Provide `-ReportPath reports/LabUsers.xlsx`, or omit to create a timestamped file under `reports/`.
 - **Example:**
   - `pwsh scripts/Deploy-Lab.ps1 -Action apply -AddRdp -Count 3 -Region "Sweden Central" -RdpAllowedCidrs @("203.0.113.4/32") -AutoApprove -ReportPath reports/LabUsers.xlsx`
+
+**Report-Only RDP**
+
+- Report-only now generates even without Terraform state. To include RDP client rows without having applied the RDP stack:
+  - Create `terraform.tfvars.json` in the repo root with:
+    `{ "enable_rdp": true, "resource_group_count": 2 }`
+    - Adjust `resource_group_count` to match what you want printed.
+    - Optional: set `"rdp_prefix": "SASE-RDPClient"` to override the default prefix.
+  - Or, run a plan/apply once with `-AddRdp` (which writes `.terraform/generated.auto.tfvars.json`), then run report-only.
+  - When no config is present, RDP is considered disabled by default and the RDP sheet will be omitted.
 
 **Credentials and Access**
 
@@ -119,6 +133,7 @@ Terraform executable resolution:
 - **Quota:** VM size/cores may hit regional quotas. Reduce `resource_group_count` or choose a smaller size.
 - **Region/Images:** If images are unavailable in your region, switch to a supported offer/sku or region.
 - **NSG rules:** If SSH/RDP fails, verify NSG inbound rules and your source IP.
+- **Report-only warns about missing outputs:** The updated `Deploy-Lab.ps1` no longer fails if outputs like `public_ips` are absent; it synthesizes rows from defaults. Pull latest if you still see: `The property 'public_ips' cannot be found`.
 
 **Caveats**
 

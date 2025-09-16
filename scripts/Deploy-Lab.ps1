@@ -473,6 +473,37 @@ function Generate-LabReport {
     }
   }
 
+  # Optional: Enrich missing IPs using Azure CLI when available and logged in
+  function Try-FillLinuxIpsFromAz($rows) {
+    if (-not (Test-Command az)) { return }
+    # verify login context non-interactively
+    try { $null = az account show --only-show-errors 2>$null | Out-Null } catch { return }
+    foreach ($row in $rows) {
+      if (-not $row -or -not $row.VMName) { continue }
+      $m = [regex]::Match($row.VMName, '\\d+')
+      if (-not $m.Success) { continue }
+      $idx = [int]$m.Value
+      $rg  = ('SASE-LAB{0}' -f $idx)
+      # Names as defined in main.tf
+      $pipName = ('sase_lab_public_ip_{0}' -f $idx)
+      $nicName = ('sase_lab_nic_{0}' -f $idx)
+      if (-not $row.PublicIP -or [string]::IsNullOrWhiteSpace($row.PublicIP)) {
+        try {
+          $pub = az network public-ip show -g $rg -n $pipName --query ipAddress -o tsv 2>$null
+          if (-not [string]::IsNullOrWhiteSpace($pub)) { $row.PublicIP = $pub }
+        } catch { }
+      }
+      if (-not $row.PrivateIP -or [string]::IsNullOrWhiteSpace($row.PrivateIP)) {
+        try {
+          $priv = az network nic show -g $rg -n $nicName --query "ipConfigurations[0].privateIpAddress" -o tsv 2>$null
+          if (-not [string]::IsNullOrWhiteSpace($priv)) { $row.PrivateIP = $priv }
+        } catch { }
+      }
+    }
+  }
+
+  Try-FillLinuxIpsFromAz -rows $linuxRows
+
   if ($outputs -and ($outputs.PSObject.Properties.Name -contains 'rdp_clients')) {
     $rdpMap = To-Hashtable $outputs.rdp_clients.value
     foreach ($user in (@($rdpMap.Keys) | Sort-Object)) {
