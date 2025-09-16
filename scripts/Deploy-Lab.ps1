@@ -149,7 +149,7 @@ function Build-TerraformArgs {
   if ($Count) { $args += @('-var', "resource_group_count=$Count") }
   if ($Region) { $args += @('-var', "rdp_location=$Region") }
   if ($RdpAllowedCidrs -and $RdpAllowedCidrs.Count -gt 0) {
-    $cidrs = $RdpAllowedCidrs | ForEach-Object { '"' + $_ + '"' } | -join ','
+    $cidrs = ($RdpAllowedCidrs | ForEach-Object { '"' + $_ + '"' }) -join ','
     $args += @('-var', "rdp_allowed_cidrs=[$cidrs]")
   }
   if ($AddRdp.IsPresent) { $args += @('-var', 'enable_rdp=true') }
