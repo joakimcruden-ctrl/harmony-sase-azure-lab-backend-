@@ -169,7 +169,7 @@ function Build-TerraformArgs {
 
   $args = @()
   if ($Count) { $args += @('-var', "resource_group_count=$Count") }
-  if ($Region) { $args += @('-var', "rdp_location=\"$Region\"") }
+  if ($Region) { $args += @('-var', "rdp_location=`"$Region`"") }
   if ($RdpAllowedCidrs -and $RdpAllowedCidrs.Count -gt 0) {
     $cidrs = ($RdpAllowedCidrs | ForEach-Object { '"' + $_ + '"' }) -join ','
     $args += @('-var', "rdp_allowed_cidrs=[$cidrs]")
