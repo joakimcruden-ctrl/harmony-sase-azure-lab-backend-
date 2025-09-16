@@ -42,6 +42,87 @@ function Ensure-AzLogin {
   }
 }
 
+function Get-PresetSubscriptionId {
+  # Sources (in order): explicit param, env vars, local files
+  param([string]$ParamSubId)
+
+  if ($ParamSubId) { return $ParamSubId }
+  if ($env:ARM_SUBSCRIPTION_ID) { return $env:ARM_SUBSCRIPTION_ID }
+  if ($env:AZURE_SUBSCRIPTION_ID) { return $env:AZURE_SUBSCRIPTION_ID }
+
+  $candidates = @(
+    Join-Path (Get-Location) 'subscription.json',
+    Join-Path (Get-Location) '.azure-subscription',
+    Join-Path (Get-Location) 'config/subscription.json',
+    Join-Path (Get-Location) 'scripts/subscription.json'
+  )
+
+  foreach ($path in $candidates) {
+    if (Test-Path $path) {
+      try {
+        if ($path.ToLower().EndsWith('.json')) {
+          $json = Get-Content $path -Raw | ConvertFrom-Json
+          $id = $json.subscriptionId
+          if (-not $id) { $id = $json.subscription_id }
+          if (-not $id) { $id = $json.id }
+          if ($id) { return $id }
+        } else {
+          $text = (Get-Content $path -Raw).Trim()
+          if ($text) { return $text }
+        }
+      } catch { }
+    }
+  }
+  return $null
+}
+
+function Resolve-Subscription {
+  param([string]$ParamSubId)
+
+  $preset = Get-PresetSubscriptionId -ParamSubId $ParamSubId
+  if ($preset) {
+    Write-Info "Using preset subscription: $preset"
+    az account set --subscription $preset | Out-Null
+    $selected = az account show | ConvertFrom-Json
+    Write-Info "Active subscription: $($selected.name) ($($selected.id))"
+    return $selected.id
+  }
+
+  try {
+    $current = az account show | ConvertFrom-Json
+    if ($current -and $current.id) {
+      Write-Info "Using current subscription: $($current.name) ($($current.id))"
+      return $current.id
+    }
+  } catch { }
+
+  Write-Warn "No active subscription detected. Fetching available subscriptions..."
+  $subs = az account list | ConvertFrom-Json
+  if (-not $subs -or $subs.Count -eq 0) {
+    throw "No subscriptions available for the logged-in account."
+  }
+
+  $default = $subs | Where-Object { $_.isDefault -eq $true } | Select-Object -First 1
+  Write-Host "Available subscriptions:" -ForegroundColor Cyan
+  for ($i=0; $i -lt $subs.Count; $i++) {
+    $mark = if ($subs[$i].isDefault) { '*' } else { ' ' }
+    Write-Host ("[{0}] {1} {2} ({3})" -f $i, $mark, $subs[$i].name, $subs[$i].id)
+  }
+  $sel = Read-Host "Select subscription index (Enter for default)"
+  if ([string]::IsNullOrWhiteSpace($sel)) {
+    if ($default) { $target = $default } else { $target = $subs[0] }
+  } else {
+    if ($sel -notmatch '^[0-9]+$' -or [int]$sel -ge $subs.Count) { throw "Invalid selection: $sel" }
+    $target = $subs[[int]$sel]
+  }
+
+  Write-Info "Setting subscription to: $($target.id)"
+  az account set --subscription $target.id | Out-Null
+  $selected = az account show | ConvertFrom-Json
+  Write-Info "Active subscription: $($selected.name) ($($selected.id))"
+  return $selected.id
+}
+
 function Select-Subscription {
   param([string]$SubId)
   if ([string]::IsNullOrWhiteSpace($SubId)) {
@@ -61,7 +142,6 @@ function Build-TerraformArgs {
     [int]$Count,
     [string]$Region,
     [string[]]$RdpAllowedCidrs,
-    [string]$SubscriptionId,
     [switch]$AddRdp
   )
 
@@ -72,7 +152,6 @@ function Build-TerraformArgs {
     $cidrs = $RdpAllowedCidrs | ForEach-Object { '"' + $_ + '"' } | -join ','
     $args += @('-var', "rdp_allowed_cidrs=[$cidrs]")
   }
-  if ($SubscriptionId) { $args += @('-var', "subscription_id=$SubscriptionId") }
   if ($AddRdp.IsPresent) { $args += @('-var', 'enable_rdp=true') }
   return $args
 }
@@ -119,8 +198,8 @@ function Invoke-Terraform {
 # ---- Main flow (mirrors wafaas-style execution) ----
 Ensure-Prereqs
 Ensure-AzLogin
-$activeSub = Select-Subscription -SubId $SubscriptionId
-$tfArgs = Build-TerraformArgs -Count $Count -Region $Region -RdpAllowedCidrs $RdpAllowedCidrs -SubscriptionId $activeSub -AddRdp:$AddRdp
+$activeSub = Resolve-Subscription -ParamSubId $SubscriptionId
+$tfArgs = Build-TerraformArgs -Count $Count -Region $Region -RdpAllowedCidrs $RdpAllowedCidrs -AddRdp:$AddRdp
 # Normalize alias
 if ($Action -eq 'delete') { $Action = 'destroy' }
 Invoke-Terraform -Action $Action -ExtraArgs $tfArgs -AutoApprove:$AutoApprove

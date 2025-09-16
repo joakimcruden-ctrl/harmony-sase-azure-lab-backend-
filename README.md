@@ -31,6 +31,7 @@
 - **Region:** `location` is specified per resource in `main.tf` (default "Sweden Central"). Adjust to your nearest region.
 - **RDP Module Vars:** In `rdp.tf` you can set `rdp_location`, `rdp_prefix`, `rdp_vm_size`, `rdp_allowed_cidrs` (default `0.0.0.0/0`; tighten this).
   - Toggle with `enable_rdp` (default `false`). The PowerShell `-AddRdp` flag sets this for you.
+  - RDP VM count always equals `resource_group_count` when enabled (no separate count to keep them in sync).
 
 Examples:
 
@@ -59,6 +60,10 @@ Examples:
   - Destroy/Delete: `pwsh scripts/Deploy-Lab.ps1 -Action destroy -AutoApprove` or `-Action delete`
   - Add RDP clients: append `-AddRdp` to include the optional `SASE-RDPClient` stack (disabled by default)
   - Optional params: `-SubscriptionId <GUID>`, `-Region "Sweden Central"`, `-RdpAllowedCidrs @("203.0.113.4/32")`
+
+Subscription selection mirrors the referenced project:
+- Preset sources checked in order: CLI param `-SubscriptionId` (optional), env `ARM_SUBSCRIPTION_ID` or `AZURE_SUBSCRIPTION_ID`, then local files `subscription.json` (with `subscriptionId`), `.azure-subscription` (plain GUID), `config/subscription.json`, or `scripts/subscription.json`.
+- If none found, the script uses the current `az` default; if none, it lists available subscriptions and prompts you to pick one, then runs Terraform under that context. You don’t need to pass a subscription on the command line.
 
 **Credentials and Access**
 
