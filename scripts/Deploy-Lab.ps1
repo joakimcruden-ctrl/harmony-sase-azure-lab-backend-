@@ -186,8 +186,10 @@ function Invoke-Terraform {
     [string]$TerraformExe
   )
 
-  $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-  $repo = Resolve-Path (Join-Path $root '..')
+  $scriptRoot = $PSScriptRoot
+  if (-not $scriptRoot) { $scriptRoot = Split-Path -Parent $PSCommandPath }
+  if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
+  $repo = Resolve-Path (Join-Path -Path $scriptRoot -ChildPath '..')
   Push-Location $repo
   try {
     if (-not (Test-Path ".terraform")) {
